@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% load static %}
+{% block header %}
+  Об авторе проекта
+{% endblock %}
+{% block content %}
+<h1>Привет, я Наталья Позднышева</h1>
+<a href='https://github.com/pozdnysheva/'> Ссылка на GitHub </a>
+<br>
+<img src="{% static 'img/desktop.jpg' %}"  width="30%" height="30%">
+<p>Мой рабочий стол</p>
+{% endblock %}
