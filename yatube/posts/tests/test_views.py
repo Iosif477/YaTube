@@ -19,6 +19,7 @@ class PostsPagesTests(TestCase):
         cls.user = User.objects.create_user(username='test-author')
         cls.authorized_client = Client()
         cls.authorized_client.force_login(cls.user)
+        cls.follow_author = User.objects.create_user(username='follow-author')
         cls.group = Group.objects.create(
             title='Тестовая группа',
             slug='test-slug',
@@ -32,6 +33,21 @@ class PostsPagesTests(TestCase):
                 group=cls.group) for i in range(TEST_POST_COUNT))
         Post.objects.bulk_create(posts)
         cls.post = Post.objects.get(pk=1)
+        small_gif = (
+            b'\x47\x49\x46\x38\x39\x61\x02\x00'
+            b'\x01\x00\x80\x00\x00\x00\x00\x00'
+            b'\xFF\xFF\xFF\x21\xF9\x04\x00\x00'
+            b'\x00\x00\x00\x2C\x00\x00\x00\x00'
+            b'\x02\x00\x01\x00\x00\x02\x02\x0C'
+            b'\x0A\x00\x3B'
+        )
+        uploaded = SimpleUploadedFile(
+            name='small.gif',
+            content=small_gif,
+            content_type='image/gif'
+        )
+        cls.post.image = uploaded
+        cls.post.save()
 
     def setUp(cls):
         cache.clear()
@@ -90,7 +106,7 @@ class PostsPagesTests(TestCase):
         self.assertTrue(response.context.get('is_edit'))
         self.assertEqual(response.context.get('post_id'), 1)
 
-    def test_post_detail_pages_show_correct_context(self):
+    def test_post_detail_show_correct_context(self):
         """Шаблон post_detail сформирован с правильным контекстом."""
         response = self.authorized_client.get(
             reverse('posts:post_detail', kwargs={'post_id': self.post.pk})
@@ -107,6 +123,10 @@ class PostsPagesTests(TestCase):
         self.assertEqual(
             response.context['post_number'],
             Post.objects.filter(author=self.user).count()
+        )
+        self.assertEqual(
+            response.context['post'].image,
+            self.post.image
         )
 
     def test_new_post_with_group_in_correct_pages(self):
@@ -148,6 +168,10 @@ class PostsPagesTests(TestCase):
                 response.context['page_obj'][i],
                 Post.objects.get(pk=Post.objects.count() - i)
             )
+        self.assertEqual(
+            self.post.image,
+            response.context['page_obj'][Post.objects.count() - 1].image,
+        )
 
     def test_group_list_show_correct_context(self):
         """Шаблон страницы group_list сформирован с правильным контекстом."""
@@ -161,6 +185,10 @@ class PostsPagesTests(TestCase):
             )
         self.assertEqual(
             response.context['group'], self.group
+        )
+        self.assertEqual(
+            self.post.image,
+            response.context['page_obj'][Post.objects.count() - 1].image,
         )
 
     def test_profile_show_correct_context(self):
@@ -180,6 +208,10 @@ class PostsPagesTests(TestCase):
             response.context['post_number'],
             Post.objects.filter(author=self.user).count()
         )
+        self.assertEqual(
+            self.post.image,
+            response.context['page_obj'][Post.objects.count() - 1].image,
+        )
 
     def test_post_detail_show_new_comment(self):
         """Шаблон post_detail отображает новый комментарий."""
@@ -192,44 +224,6 @@ class PostsPagesTests(TestCase):
             reverse('posts:post_detail', kwargs={'post_id': self.post.pk})
         )
         self.assertIn(comment, response.context['comments'])
-
-    def test_image_context(self):
-        """Шаблоны страниц хранят изображение в контексте"""
-        small_gif = (
-            b'\x47\x49\x46\x38\x39\x61\x02\x00'
-            b'\x01\x00\x80\x00\x00\x00\x00\x00'
-            b'\xFF\xFF\xFF\x21\xF9\x04\x00\x00'
-            b'\x00\x00\x00\x2C\x00\x00\x00\x00'
-            b'\x02\x00\x01\x00\x00\x02\x02\x0C'
-            b'\x0A\x00\x3B'
-        )
-        uploaded = SimpleUploadedFile(
-            name='small.gif',
-            content=small_gif,
-            content_type='image/gif'
-        )
-        self.post.image = uploaded
-        self.post.save()
-        pages_names = [
-            reverse('posts:index'),
-            reverse('posts:group_list', kwargs={'slug': self.group.slug}),
-            reverse('posts:profile', kwargs={'username': self.user.username}),
-        ]
-        post_count = Post.objects.count()
-        for reverse_name in pages_names:
-            with self.subTest(reverse_name=reverse_name):
-                response = self.authorized_client.get(reverse_name)
-                self.assertEqual(
-                    self.post.image,
-                    response.context['page_obj'][post_count - 1].image,
-                )
-        response = self.authorized_client.get(
-            reverse('posts:post_detail', kwargs={'post_id': self.post.pk})
-        )
-        self.assertEqual(
-            self.post.image,
-            response.context['post'].image
-        )
 
     def test_index_cache(self):
         """Шаблон страницы index хранит записи в кеше"""
@@ -247,38 +241,52 @@ class PostsPagesTests(TestCase):
         self.assertEqual(response.content, new_response.content)
 
     def test_follow_and_unfollow_author(self):
-        """Авторизованный пользователь может подписываться на других
-        пользователей и удалять их из подписок."""
-        follow_author = User.objects.create_user(username='follow-author')
+        """Авторизованный пользователь может
+        подписываться на других пользователей."""
         self.authorized_client.get(reverse(
-            'posts:profile_follow', kwargs={'username': follow_author.username}
+            'posts:profile_follow',
+            kwargs={'username': self.follow_author.username}
         ))
         self.assertTrue(Follow.objects.filter(
-            user=self.user, author=follow_author
+            user=self.user, author=self.follow_author
         ).exists())
+
+    def test_follow_and_unfollow_author(self):
+        """Авторизованный пользователь может
+        удалять авторов из подписок."""
+        self.authorized_client.get(reverse(
+            'posts:profile_follow',
+            kwargs={'username': self.follow_author.username}
+        ))
         self.authorized_client.get(reverse(
             'posts:profile_unfollow',
-            kwargs={'username': follow_author.username}
+            kwargs={'username': self.follow_author.username}
         ))
         self.assertFalse(Follow.objects.filter(
-            user=self.user, author=follow_author
+            user=self.user, author=self.follow_author
         ).exists())
 
     def test_new_post_in_correct_follow_pages(self):
-        """Новая запись автора появляется в ленте подписчиков
-        и не появляется в ленте тех, кто не подписан."""
-        follow_author = User.objects.create_user(username='follow-author')
+        """Новая запись автора появляется в ленте подписчиков."""
         self.authorized_client.get(reverse(
-            'posts:profile_follow', kwargs={'username': follow_author.username}
+            'posts:profile_follow',
+            kwargs={'username': self.follow_author.username}
         ))
         new_post = Post.objects.create(
-            author=follow_author,
+            author=self.follow_author,
             text='Тестовый пост',
         )
         response = self.authorized_client.get(
             reverse('posts:follow_index')
         )
         self.assertIn(new_post, response.context['page_obj'])
+
+    def test_new_post_in_correct_follow_pages(self):
+        """Новая запись автора не появляется в ленте тех, кто не подписан."""
+        new_post = Post.objects.create(
+            author=self.follow_author,
+            text='Тестовый пост',
+        )
         other_user = User.objects.create_user(username='other_user')
         other_authorized_client = Client()
         other_authorized_client.force_login(other_user)
